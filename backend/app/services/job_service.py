@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from app.models.job import SyncJob
+from app.models.job import Job
 from app.schemas.job import JobCreate
 from app.tasks.sync_task import run_sync
 from celery_app import celery_app
@@ -11,16 +11,16 @@ from datetime import datetime
 r = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
-def get_all(db: Session) -> List[SyncJob]:
-    return db.query(SyncJob).all()
+def get_all(db: Session) -> List[Job]:
+    return db.query(Job).all()
 
 
-def get_by_id(db: Session, job_id: int) -> Optional[SyncJob]:
-    return db.query(SyncJob).filter(SyncJob.id == job_id).first()
+def get_by_id(db: Session, job_id: int) -> Optional[Job]:
+    return db.query(Job).filter(Job.id == job_id).first()
 
 
-def start(db: Session, payload: JobCreate) -> SyncJob:
-    job = SyncJob(
+def start(db: Session, payload: JobCreate) -> Job:
+    job = Job(
         model_mapping_id=payload.model_mapping_id,
         status="pending",
         started_at=datetime.utcnow(),
