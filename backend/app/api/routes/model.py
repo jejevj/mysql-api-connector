@@ -75,7 +75,6 @@ def create_table(model_id: int, db: Session = Depends(get_db)):
 
 @router.post("/db-tables")
 async def get_db_tables(config: DBConfig):
-    """List semua tabel dari database target"""
     try:
         tables = await model_service.get_target_tables(
             host=config.host, port=config.port, db_name=config.db_name,
@@ -89,7 +88,6 @@ async def get_db_tables(config: DBConfig):
 
 @router.post("/db-columns")
 async def get_db_columns(config: DBConfig):
-    """List semua kolom dari tabel target beserta tipe datanya"""
     if not config.table:
         raise HTTPException(status_code=400, detail="table is required")
     try:
@@ -100,4 +98,20 @@ async def get_db_columns(config: DBConfig):
         return {"columns": columns}
     except Exception as e:
         logger.error(f"get_db_columns error: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/db-check-table")
+async def check_table_exists(config: DBConfig):
+    """Cek apakah tabel ada di DB target"""
+    if not config.table:
+        raise HTTPException(status_code=400, detail="table is required")
+    try:
+        exists = await model_service.check_table_exists(
+            host=config.host, port=config.port, db_name=config.db_name,
+            user=config.user, password=config.password or "", table=config.table
+        )
+        return {"exists": exists, "table": config.table}
+    except Exception as e:
+        logger.error(f"check_table_exists error: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
