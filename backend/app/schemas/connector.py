@@ -1,6 +1,7 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, Any, Dict
 from datetime import datetime
+import json
 
 
 class ConnectorBase(BaseModel):
@@ -16,6 +17,31 @@ class ConnectorBase(BaseModel):
     cursor_path: Optional[str] = None
     data_path: str = "data.items"
     total_path: str = "data.totalItems"
+
+    @field_validator('headers', 'query_params', mode='before')
+    @classmethod
+    def parse_json_dict(cls, v):
+        if v is None:
+            return {}
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, dict) else {}
+            except (json.JSONDecodeError, ValueError):
+                return {}
+        return v
+
+    @field_validator('body', mode='before')
+    @classmethod
+    def parse_json_body(cls, v):
+        if v is None or v == '' or v == 'null':
+            return None
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        return v
 
 
 class ConnectorCreate(ConnectorBase):

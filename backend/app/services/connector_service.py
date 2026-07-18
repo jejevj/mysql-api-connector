@@ -14,7 +14,11 @@ def get_by_id(db: Session, connector_id: int) -> Optional[Connector]:
 
 
 def create(db: Session, payload: ConnectorCreate) -> Connector:
-    obj = Connector(**payload.model_dump())
+    data = payload.model_dump()
+    # Pastikan JSON fields tidak None
+    data['headers'] = data.get('headers') or {}
+    data['query_params'] = data.get('query_params') or {}
+    obj = Connector(**data)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -25,7 +29,10 @@ def update(db: Session, connector_id: int, payload: ConnectorUpdate) -> Optional
     obj = get_by_id(db, connector_id)
     if not obj:
         return None
-    for key, value in payload.model_dump().items():
+    data = payload.model_dump()
+    data['headers'] = data.get('headers') or {}
+    data['query_params'] = data.get('query_params') or {}
+    for key, value in data.items():
         setattr(obj, key, value)
     db.commit()
     db.refresh(obj)
@@ -48,9 +55,12 @@ async def test_request(db: Session, connector: Connector) -> dict:
             params=connector.query_params or {},
             json=connector.body if connector.method in ["POST", "PUT", "PATCH"] else None,
         )
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception:
+            data = response.text
         # Simpan sample response
-        connector.sample_response = data
+        connector.sample_response = data if isinstance(data, (dict, list)) else {"raw": data}
         db.commit()
         return {
             "status_code": response.status_code,
