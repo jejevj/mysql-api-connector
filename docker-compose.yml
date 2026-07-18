@@ -74,5 +74,20 @@ services:
       - worker
     restart: unless-stopped
 
+  # ─── Frontend React ───────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mac_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   redis_data:
