@@ -1,4 +1,8 @@
-"""Script untuk patch field_mappings model ID 1 (zawa_keluarga)
+"""
+Script untuk patch model ID 1:
+- Fix connector_id ke 2 (API Kemenag)
+- Set field_mappings lengkap (49 field)
+- Set upsert_keys
 Jalankan: docker compose exec api python seed_model1.py
 """
 import sys
@@ -8,8 +12,6 @@ from app.core.database import SessionLocal
 from app.models.model_mapping import ModelMapping
 from sqlalchemy.orm.attributes import flag_modified
 
-# Semua kolom tabel zawa_keluarga yang bisa di-mapping dari API
-# Kolom: id, raw_data, synced_at, created_at, updated_at -- SKIP (internal)
 FIELD_MAPPINGS = [
     {"source": "nomor_kartu_keluarga",              "target": "nomor_kartu_keluarga",              "type": "VARCHAR(20)",  "nullable": True},
     {"source": "nama_anggota_keluarga",             "target": "nama_anggota_keluarga",             "type": "VARCHAR(255)", "nullable": True},
@@ -64,6 +66,7 @@ FIELD_MAPPINGS = [
 ]
 
 UPSERT_KEYS = ["nomor_kartu_keluarga"]
+CORRECT_CONNECTOR_ID = 2  # ID connector "API Kemenag"
 
 if __name__ == "__main__":
     db = SessionLocal()
@@ -73,14 +76,19 @@ if __name__ == "__main__":
             print("ERROR: Model ID 1 tidak ditemukan!")
             sys.exit(1)
 
+        print(f"Sebelum: connector_id={m.connector_id}, field_mappings={len(m.field_mappings)}, upsert_keys={m.upsert_keys}")
+
+        m.connector_id   = CORRECT_CONNECTOR_ID
         m.field_mappings = FIELD_MAPPINGS
-        m.upsert_keys = UPSERT_KEYS
+        m.upsert_keys    = UPSERT_KEYS
+
         flag_modified(m, 'field_mappings')
         flag_modified(m, 'upsert_keys')
+
         db.commit()
         db.refresh(m)
 
-        print(f"OK! field_mappings count : {len(m.field_mappings)}")
-        print(f"OK! upsert_keys          : {m.upsert_keys}")
+        print(f"Sesudah: connector_id={m.connector_id}, field_mappings={len(m.field_mappings)}, upsert_keys={m.upsert_keys}")
+        print("DONE — model siap untuk sync!")
     finally:
         db.close()
