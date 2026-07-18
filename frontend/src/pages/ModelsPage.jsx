@@ -11,7 +11,7 @@ import EmptyState from '../components/EmptyState'
 import ConfirmDialog from '../components/ConfirmDialog'
 import ModelForm from '../components/ModelForm'
 
-// Badge status tabel
+// Badge status tabel — live check ke DB target
 function TableStatusBadge({ model }) {
   const { data, isLoading } = useQuery({
     queryKey: ['table-status', model.id],
@@ -82,8 +82,8 @@ export default function ModelsPage() {
   })
 
   const startJobMutation = useMutation({
-    mutationFn: (modelId) => jobApi.start({ model_id: modelId }),
-    onSuccess: (res) => {
+    mutationFn: (modelId) => jobApi.start({ model_mapping_id: modelId }),
+    onSuccess: () => {
       toast.success('Sync job dimulai!')
       navigate('/jobs')
     },
@@ -158,7 +158,10 @@ export default function ModelsPage() {
                     disabled={startJobMutation.isPending}
                     title="Mulai sync sekarang"
                   >
-                    <Play size={12} /> Sync
+                    {startJobMutation.isPending
+                      ? <RefreshCw size={12} className="animate-spin" />
+                      : <Play size={12} />}
+                    Sync
                   </button>
                   <button
                     className="btn-secondary text-xs px-3 py-1.5"
