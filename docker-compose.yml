@@ -24,8 +24,9 @@ services:
     ports:
       - "3307:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: password
-      MYSQL_DATABASE: mac_meta
+      MYSQL_ROOT_PASSWORD: ""
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+      MYSQL_DATABASE: db_simzat
     volumes:
       - mysql_meta_data:/var/lib/mysql
     restart: unless-stopped
