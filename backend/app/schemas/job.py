@@ -1,13 +1,17 @@
-from pydantic import BaseModel
-from typing import Optional, Any
+from pydantic import BaseModel, ConfigDict
+from typing import Optional
 from datetime import datetime
 
 
 class JobCreate(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     model_mapping_id: int
 
 
 class JobResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     id: int
     model_mapping_id: int
     celery_task_id: Optional[str] = None
