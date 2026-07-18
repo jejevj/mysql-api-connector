@@ -5,7 +5,7 @@ import time
 from celery_app import celery_app
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.job import SyncJob
+from app.models.job import Job
 from app.models.model_mapping import ModelMapping
 from app.models.connector import Connector
 import redis
@@ -38,8 +38,9 @@ def _upsert_batch(conn, table: str, field_mappings: list, upsert_keys: list, ite
     source_keys = [f['source'] for f in field_mappings]
     placeholders = ", ".join(["%s"] * len(columns))
     col_names = ", ".join([f"`{c}`" for c in columns])
-    update_clause = ", ".join([f"`{c}`=VALUES(`{c}`)"
-                               for c in columns if c not in upsert_keys])
+    update_clause = ", ".join(
+        [f"`{c}`=VALUES(`{c}`)" for c in columns if c not in upsert_keys]
+    )
 
     sql = f"""
         INSERT INTO `{table}` ({col_names})
@@ -62,14 +63,27 @@ def _upsert_batch(conn, table: str, field_mappings: list, upsert_keys: list, ite
 def run_sync(self, job_id: int):
     db = SessionLocal()
     try:
-        job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
+        job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
+            _push_log(job_id, "ERROR", f"Job {job_id} tidak ditemukan.")
             return
 
-        model: ModelMapping = job.model_mapping
-        connector: Connector = model.connector
+        # Load relasi secara eksplisit
+        model = db.query(ModelMapping).filter(ModelMapping.id == job.model_mapping_id).first()
+        connector = db.query(Connector).filter(Connector.id == model.connector_id).first()
 
-        _push_log(job_id, "INFO", f"Sync job {job_id} started")
+        if not model or not connector:
+            _push_log(job_id, "ERROR", "Model atau connector tidak ditemukan.")
+            job.status = "error"
+            job.error_message = "Model atau connector tidak ditemukan."
+            db.commit()
+            return
+
+        job.status = "running"
+        job.started_at = datetime.utcnow()
+        db.commit()
+
+        _push_log(job_id, "INFO", f"Sync job {job_id} dimulai — connector: {connector.name}")
 
         conn = pymysql.connect(
             host=model.target_db_host,
@@ -100,9 +114,11 @@ def run_sync(self, job_id: int):
 
             params = dict(connector.query_params or {})
             if connector.pagination_type == "cursor" and cursor_value:
-                params["cursor"] = cursor_value
+                params[connector.pagination_param] = cursor_value
             elif connector.pagination_type == "page":
                 params[connector.pagination_param] = page
+            elif connector.pagination_type == "offset":
+                params[connector.pagination_param] = (page - 1) * int(params.get("limit", 10))
 
             try:
                 with httpx.Client(timeout=30) as client:
@@ -111,7 +127,7 @@ def run_sync(self, job_id: int):
                         url=connector.url,
                         headers=connector.headers or {},
                         params=params,
-                        json=connector.body if connector.method in ["POST", "PUT"] else None,
+                        json=connector.body if connector.method in ["POST", "PUT", "PATCH"] else None,
                     )
                 data = response.json()
             except Exception as e:
@@ -129,23 +145,27 @@ def run_sync(self, job_id: int):
                 _push_log(job_id, "INFO", "Tidak ada item lagi. Sync selesai.")
                 break
 
-            batch_count = _upsert_batch(conn, model.target_table, model.field_mappings, model.upsert_keys, items)
+            batch_count = _upsert_batch(
+                conn, model.target_table,
+                model.field_mappings, model.upsert_keys, items
+            )
             total_processed += batch_count
 
             job.processed_items = total_processed
-            job.total_items = total
+            job.total_items = int(total) if total else 0
             job.current_cursor = next_cursor
             job.current_page = page
             db.commit()
 
-            _push_log(job_id, "INFO", f"Batch done: {batch_count} items. Total: {total_processed}/{total}")
+            _push_log(job_id, "INFO",
+                      f"Batch selesai: +{batch_count} items | Total: {total_processed}/{total}")
 
             if connector.pagination_type == "cursor":
                 if not next_cursor:
                     _push_log(job_id, "INFO", "Cursor habis. Sync selesai.")
                     break
                 cursor_value = next_cursor
-            elif connector.pagination_type == "page":
+            elif connector.pagination_type in ["page", "offset"]:
                 has_next = _get_nested(data, "data.hasNextPage")
                 if not has_next:
                     break
@@ -156,15 +176,18 @@ def run_sync(self, job_id: int):
         job.status = "done"
         job.finished_at = datetime.utcnow()
         db.commit()
-        _push_log(job_id, "INFO", f"Sync job {job_id} selesai. Total: {total_processed} items.")
+        _push_log(job_id, "INFO",
+                  f"✅ Sync job {job_id} selesai. Total diproses: {total_processed} items.")
         conn.close()
 
     except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
         _push_log(job_id, "ERROR", f"Fatal error: {str(e)}")
-        job = db.query(SyncJob).filter(SyncJob.id == job_id).first()
+        job = db.query(Job).filter(Job.id == job_id).first()
         if job:
             job.status = "error"
-            job.error_message = str(e)
+            job.error_message = f"{str(e)}\n{tb}"
             db.commit()
     finally:
         db.close()
