@@ -10,7 +10,7 @@ class JobCreate(BaseModel):
 
 
 class JobResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
+    model_config = ConfigDict(protected_namespaces=(), from_attributes=True)
 
     id: int
     model_mapping_id: int
@@ -25,6 +25,3 @@ class JobResponse(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
