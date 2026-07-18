@@ -1,0 +1,98 @@
+version: "3.9"
+
+services:
+
+  # ─── Redis ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: mac_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── MySQL Metadata ───────────────────────────────────────
+  mysql_meta:
+    image: mysql:8.0
+    container_name: mac_mysql_meta
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: mac_meta
+    volumes:
+      - mysql_meta_data:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-ppassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ─── FastAPI Backend ──────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mac_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_SYNC_URL=mysql+pymysql://root:password@mysql_meta:3306/mac_meta
+      - DATABASE_URL=mysql+aiomysql://root:password@mysql_meta:3306/mac_meta
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=true
+    volumes:
+      - ./backend:/app
+    depends_on:
+      mysql_meta:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Celery Worker ────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mac_worker
+    command: celery -A celery_app worker --loglevel=info --concurrency=4
+    environment:
+      - DATABASE_SYNC_URL=mysql+pymysql://root:password@mysql_meta:3306/mac_meta
+      - DATABASE_URL=mysql+aiomysql://root:password@mysql_meta:3306/mac_meta
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql_meta:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Flower (Celery Monitor) ──────────────────────────────
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mac_flower
+    command: celery -A celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - worker
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+  mysql_meta_data:
