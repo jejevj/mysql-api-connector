@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, Any, Dict
 from datetime import datetime
 
@@ -8,8 +8,8 @@ class ConnectorBase(BaseModel):
     description: Optional[str] = None
     url: str
     method: str = "GET"
-    headers: Optional[Dict[str, str]] = {}
-    query_params: Optional[Dict[str, str]] = {}
+    headers: Optional[Dict[str, Any]] = {}
+    query_params: Optional[Dict[str, Any]] = {}
     body: Optional[Any] = None
     pagination_type: str = "cursor"
     pagination_param: str = "page"
@@ -27,10 +27,9 @@ class ConnectorUpdate(ConnectorBase):
 
 
 class ConnectorResponse(ConnectorBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     sample_response: Optional[Any] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
