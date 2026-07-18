@@ -38,15 +38,31 @@ def _upsert_batch(conn, table: str, field_mappings: list, upsert_keys: list, ite
     source_keys = [f['source'] for f in field_mappings]
     placeholders = ", ".join(["%s"] * len(columns))
     col_names = ", ".join([f"`{c}`" for c in columns])
-    update_clause = ", ".join(
-        [f"`{c}`=VALUES(`{c}`)" for c in columns if c not in upsert_keys]
-    )
 
-    sql = f"""
-        INSERT INTO `{table}` ({col_names})
-        VALUES ({placeholders})
-        ON DUPLICATE KEY UPDATE {update_clause};
-    """
+    # Kolom yang di-update = semua kolom kecuali upsert_keys
+    update_cols = [c for c in columns if c not in (upsert_keys or [])]
+    update_clause = ", ".join([f"`{c}`=VALUES(`{c}`)" for c in update_cols])
+
+    # Pilih strategi SQL berdasarkan kondisi upsert_keys & update_clause
+    if upsert_keys and update_clause:
+        # Normal upsert: ada unique key dan ada kolom yang di-update
+        sql = (
+            f"INSERT INTO `{table}` ({col_names}) "
+            f"VALUES ({placeholders}) "
+            f"ON DUPLICATE KEY UPDATE {update_clause}"
+        )
+    elif upsert_keys and not update_clause:
+        # Semua kolom adalah upsert_keys — insert, skip jika sudah ada
+        sql = (
+            f"INSERT IGNORE INTO `{table}` ({col_names}) "
+            f"VALUES ({placeholders})"
+        )
+    else:
+        # Tidak ada upsert_keys — plain insert ignore
+        sql = (
+            f"INSERT IGNORE INTO `{table}` ({col_names}) "
+            f"VALUES ({placeholders})"
+        )
 
     rows = []
     for item in items:
@@ -62,13 +78,13 @@ def _upsert_batch(conn, table: str, field_mappings: list, upsert_keys: list, ite
 @celery_app.task(bind=True)
 def run_sync(self, job_id: int):
     db = SessionLocal()
+    conn = None
     try:
         job = db.query(Job).filter(Job.id == job_id).first()
         if not job:
             _push_log(job_id, "ERROR", f"Job {job_id} tidak ditemukan.")
             return
 
-        # Load relasi secara eksplisit
         model = db.query(ModelMapping).filter(ModelMapping.id == job.model_mapping_id).first()
         connector = db.query(Connector).filter(Connector.id == model.connector_id).first()
 
@@ -84,6 +100,11 @@ def run_sync(self, job_id: int):
         db.commit()
 
         _push_log(job_id, "INFO", f"Sync job {job_id} dimulai — connector: {connector.name}")
+        _push_log(job_id, "INFO",
+                  f"Target: {model.target_db_host}/{model.target_db_name} → `{model.target_table}`")
+        _push_log(job_id, "INFO",
+                  f"Field mappings: {len(model.field_mappings)} | "
+                  f"Upsert keys: {model.upsert_keys or '(none — INSERT IGNORE)'}")
 
         conn = pymysql.connect(
             host=model.target_db_host,
@@ -91,6 +112,7 @@ def run_sync(self, job_id: int):
             user=model.target_db_user,
             password=model.target_db_password,
             database=model.target_db_name,
+            charset='utf8mb4',
         )
 
         cursor_value = job.current_cursor
@@ -145,10 +167,20 @@ def run_sync(self, job_id: int):
                 _push_log(job_id, "INFO", "Tidak ada item lagi. Sync selesai.")
                 break
 
-            batch_count = _upsert_batch(
-                conn, model.target_table,
-                model.field_mappings, model.upsert_keys, items
-            )
+            try:
+                batch_count = _upsert_batch(
+                    conn, model.target_table,
+                    model.field_mappings, model.upsert_keys, items
+                )
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                _push_log(job_id, "ERROR", f"Upsert error halaman {page}: {str(e)}")
+                job.status = "error"
+                job.error_message = f"{str(e)}\n{tb}"
+                db.commit()
+                break
+
             total_processed += batch_count
 
             job.processed_items = total_processed
@@ -177,17 +209,21 @@ def run_sync(self, job_id: int):
         job.finished_at = datetime.utcnow()
         db.commit()
         _push_log(job_id, "INFO",
-                  f"✅ Sync job {job_id} selesai. Total diproses: {total_processed} items.")
-        conn.close()
+                  f"\u2705 Sync job {job_id} selesai. Total diproses: {total_processed} items.")
 
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         _push_log(job_id, "ERROR", f"Fatal error: {str(e)}")
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if job:
-            job.status = "error"
-            job.error_message = f"{str(e)}\n{tb}"
-            db.commit()
+        try:
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job:
+                job.status = "error"
+                job.error_message = f"{str(e)}\n{tb}"
+                db.commit()
+        except Exception:
+            pass
     finally:
+        if conn:
+            conn.close()
         db.close()
