@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Any
 from datetime import datetime
 
@@ -32,10 +32,9 @@ class ModelMappingUpdate(ModelMappingBase):
 
 
 class ModelMappingResponse(ModelMappingBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     table_created: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True

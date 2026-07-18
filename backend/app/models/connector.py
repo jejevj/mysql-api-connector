@@ -11,18 +11,14 @@ class Connector(Base):
     description = Column(Text, nullable=True)
     url = Column(Text, nullable=False)
     method = Column(String(10), default="GET")
-    headers = Column(JSON, default={})
-    query_params = Column(JSON, default={})
+    headers = Column(JSON, nullable=True, default={})
+    query_params = Column(JSON, nullable=True, default={})
     body = Column(JSON, nullable=True)
-
-    # Pagination config
-    pagination_type = Column(String(50), default="cursor")  # cursor | page | offset
+    pagination_type = Column(String(20), default="cursor")
     pagination_param = Column(String(100), default="page")
-    cursor_path = Column(String(255), nullable=True)  # JSON path ke cursor di response
-    data_path = Column(String(255), default="data.items")  # JSON path ke array data
-    total_path = Column(String(255), default="data.totalItems")  # JSON path ke total
-
+    cursor_path = Column(String(255), nullable=True)
+    data_path = Column(String(255), default="data.items")
+    total_path = Column(String(255), default="data.totalItems")
     sample_response = Column(JSON, nullable=True)
-
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
