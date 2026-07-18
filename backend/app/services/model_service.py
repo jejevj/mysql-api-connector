@@ -1,8 +1,12 @@
-import pymysql
+import aiomysql
 from sqlalchemy.orm import Session
 from app.models.model_mapping import ModelMapping
 from app.schemas.model_mapping import ModelMappingCreate, ModelMappingUpdate
 from typing import Optional, List
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_all(db: Session) -> List[ModelMapping]:
@@ -14,7 +18,10 @@ def get_by_id(db: Session, model_id: int) -> Optional[ModelMapping]:
 
 
 def create(db: Session, payload: ModelMappingCreate) -> ModelMapping:
-    obj = ModelMapping(**payload.model_dump())
+    data = payload.model_dump()
+    data['upsert_keys'] = data.get('upsert_keys') or []
+    data['field_mappings'] = data.get('field_mappings') or []
+    obj = ModelMapping(**data)
     db.add(obj)
     db.commit()
     db.refresh(obj)
@@ -25,7 +32,10 @@ def update(db: Session, model_id: int, payload: ModelMappingUpdate) -> Optional[
     obj = get_by_id(db, model_id)
     if not obj:
         return None
-    for key, value in payload.model_dump().items():
+    data = payload.model_dump()
+    data['upsert_keys'] = data.get('upsert_keys') or []
+    data['field_mappings'] = data.get('field_mappings') or []
+    for key, value in data.items():
         setattr(obj, key, value)
     db.commit()
     db.refresh(obj)
@@ -39,37 +49,49 @@ def delete(db: Session, model_id: int):
         db.commit()
 
 
-def create_target_table(db: Session, model_id: int) -> Optional[str]:
+def create_target_table(db: Session, model_id: int):
     obj = get_by_id(db, model_id)
     if not obj:
         return None
+    return obj.target_table
 
-    conn = pymysql.connect(
-        host=obj.target_db_host,
-        port=obj.target_db_port,
-        user=obj.target_db_user,
-        password=obj.target_db_password,
-        database=obj.target_db_name,
+
+async def get_target_tables(host: str, port: int, db_name: str, user: str, password: str) -> List[str]:
+    """Ambil daftar tabel dari database target via aiomysql"""
+    conn = await aiomysql.connect(
+        host=host, port=port, db=db_name,
+        user=user, password=password,
+        connect_timeout=10, charset='utf8mb4'
     )
     try:
-        columns = []
-        for field in obj.field_mappings:
-            nullable = "NULL" if field.get("nullable", True) else "NOT NULL"
-            columns.append(f"`{field['target']}` {field['type']} {nullable}")
+        async with conn.cursor() as cur:
+            await cur.execute("SHOW TABLES")
+            rows = await cur.fetchall()
+            return [row[0] for row in rows]
+    finally:
+        conn.close()
 
-        columns_sql = ",\n  ".join(columns)
-        create_sql = f"""
-        CREATE TABLE IF NOT EXISTS `{obj.target_table}` (
-            `_id` BIGINT AUTO_INCREMENT PRIMARY KEY,
-            {columns_sql}
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """
-        with conn.cursor() as cursor:
-            cursor.execute(create_sql)
-        conn.commit()
 
-        obj.table_created = True
-        db.commit()
-        return obj.target_table
+async def get_target_columns(host: str, port: int, db_name: str, user: str, password: str, table: str) -> List[dict]:
+    """Ambil kolom + tipe data dari tabel target"""
+    conn = await aiomysql.connect(
+        host=host, port=port, db=db_name,
+        user=user, password=password,
+        connect_timeout=10, charset='utf8mb4'
+    )
+    try:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(f"DESCRIBE `{table}`")
+            rows = await cur.fetchall()
+            return [
+                {
+                    "column": row["Field"],
+                    "type": row["Type"],
+                    "nullable": row["Null"] == "YES",
+                    "key": row["Key"],
+                    "default": row["Default"],
+                }
+                for row in rows
+            ]
     finally:
         conn.close()

@@ -32,6 +32,8 @@ export const modelApi = {
   update:      (id, data) => api.put(`/models/${id}`, data),
   delete:      (id)       => api.delete(`/models/${id}`),
   createTable: (id)       => api.post(`/models/${id}/create-table`),
+  dbTables:    (cfg)      => api.post('/models/db-tables', cfg),
+  dbColumns:   (cfg)      => api.post('/models/db-columns', cfg),
 }
 
 // ── Jobs ─────────────────────────────────────────────────────
