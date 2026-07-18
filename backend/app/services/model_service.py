@@ -1,5 +1,6 @@
 import aiomysql
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from app.models.model_mapping import ModelMapping
 from app.schemas.model_mapping import ModelMappingCreate, ModelMappingUpdate
 from typing import Optional, List
@@ -19,7 +20,10 @@ def get_by_id(db: Session, model_id: int) -> Optional[ModelMapping]:
 def create(db: Session, payload: ModelMappingCreate) -> ModelMapping:
     data = payload.model_dump()
     data['upsert_keys'] = data.get('upsert_keys') or []
-    data['field_mappings'] = data.get('field_mappings') or []
+    data['field_mappings'] = [
+        m if isinstance(m, dict) else m.model_dump()
+        for m in (data.get('field_mappings') or [])
+    ]
     obj = ModelMapping(**data)
     db.add(obj)
     db.commit()
@@ -33,11 +37,18 @@ def update(db: Session, model_id: int, payload: ModelMappingUpdate) -> Optional[
         return None
     data = payload.model_dump()
     data['upsert_keys'] = data.get('upsert_keys') or []
-    data['field_mappings'] = data.get('field_mappings') or []
+    data['field_mappings'] = [
+        m if isinstance(m, dict) else m.model_dump()
+        for m in (data.get('field_mappings') or [])
+    ]
     for key, value in data.items():
         setattr(obj, key, value)
+    # flag_modified wajib untuk JSON column agar SQLAlchemy detect perubahan
+    flag_modified(obj, 'field_mappings')
+    flag_modified(obj, 'upsert_keys')
     db.commit()
     db.refresh(obj)
+    logger.info(f"Model {model_id} updated: {len(obj.field_mappings)} field_mappings, upsert_keys={obj.upsert_keys}")
     return obj
 
 
