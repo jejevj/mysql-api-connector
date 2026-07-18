@@ -8,7 +8,6 @@ import {
 import { connectorApi, modelApi } from '../lib/api'
 import api from '../lib/api'
 
-// ── helpers ─────────────────────────────────────────────────
 function getNestedValue(obj, path) {
   return path.split('.').reduce((acc, k) => (acc && acc[k] !== undefined ? acc[k] : undefined), obj)
 }
@@ -30,7 +29,6 @@ function autoMapFields(apiFields, dbColumns) {
   const mappings = []
   const dbColMap = {}
   dbColumns.forEach(c => { dbColMap[c.column.toLowerCase()] = c })
-
   apiFields.forEach(({ key, sampleValue }) => {
     const match = dbColMap[key.toLowerCase()]
     if (match) {
@@ -46,7 +44,6 @@ function autoMapFields(apiFields, dbColumns) {
   return mappings
 }
 
-// Badge tipe kolom DB
 function TypeBadge({ type }) {
   const t = type?.toLowerCase() || ''
   let color = 'bg-gray-100 text-gray-500'
@@ -57,7 +54,6 @@ function TypeBadge({ type }) {
   return <span className={`text-xs font-mono px-1.5 py-0.5 rounded ${color}`}>{type}</span>
 }
 
-// Step indicator
 function Steps({ current }) {
   const steps = [
     { n: 1, label: 'Konfigurasi DB' },
@@ -85,7 +81,11 @@ function Steps({ current }) {
 }
 
 export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
-  const [step, setStep] = useState(1)
+  const isEditing = !!defaultValues?.id
+
+  // Jika edit & sudah ada mappings, langsung ke step 3
+  const [step, setStep] = useState(isEditing && defaultValues?.field_mappings?.length > 0 ? 3 : 1)
+
   const [dbConfig, setDbConfig] = useState({
     host: defaultValues?.target_db_host || 'host.docker.internal',
     port: defaultValues?.target_db_port || 3306,
@@ -97,11 +97,20 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
   const [selectedTable, setSelectedTable] = useState(defaultValues?.target_table || '')
   const [dbColumns, setDbColumns] = useState([])
   const [apiFields, setApiFields] = useState([])
-  const [mappings, setMappings] = useState([])
+
+  // ← Populate dari defaultValues jika edit
+  const [mappings, setMappings] = useState(
+    Array.isArray(defaultValues?.field_mappings) && defaultValues.field_mappings.length > 0
+      ? defaultValues.field_mappings.map(m => ({ ...m, matched: true, sampleValue: null }))
+      : []
+  )
+
   const [connectorId, setConnectorId] = useState(defaultValues?.connector_id || '')
   const [modelName, setModelName] = useState(defaultValues?.name || '')
   const [upsertKeys, setUpsertKeys] = useState(
-    Array.isArray(defaultValues?.upsert_keys) ? defaultValues.upsert_keys.join(', ') : (defaultValues?.upsert_keys || '')
+    Array.isArray(defaultValues?.upsert_keys)
+      ? defaultValues.upsert_keys.join(', ')
+      : (defaultValues?.upsert_keys || '')
   )
   const [tableSearch, setTableSearch] = useState('')
 
@@ -110,12 +119,10 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
     queryFn: () => connectorApi.list().then(r => r.data),
   })
 
-  // Step 1: Test connector
   const testMutation = useMutation({
     mutationFn: (id) => connectorApi.test(id).then(r => r.data),
   })
 
-  // Step 1 → 2: load tables
   const tablesMutation = useMutation({
     mutationFn: (cfg) => api.post('/models/db-tables', cfg).then(r => r.data),
     onSuccess: (data) => {
@@ -124,7 +131,6 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
     },
   })
 
-  // Step 2 → 3: load columns + test API
   const columnsMutation = useMutation({
     mutationFn: async (table) => {
       const connector = connectors?.find(c => String(c.id) === String(connectorId))
@@ -144,7 +150,27 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
     },
   })
 
-  const handleStep1 = async () => {
+  // Re-fetch mappings dari API + DB (refresh mapping saat edit)
+  const refreshMappingMutation = useMutation({
+    mutationFn: async () => {
+      const connector = connectors?.find(c => String(c.id) === String(connectorId))
+      if (!connector) throw new Error('Connector tidak ditemukan')
+      const [colRes, testRes] = await Promise.all([
+        api.post('/models/db-columns', { ...dbConfig, table: selectedTable }).then(r => r.data),
+        connectorApi.test(connector.id).then(r => r.data),
+      ])
+      return { columns: colRes.columns, testResult: testRes, connector }
+    },
+    onSuccess: ({ columns, testResult, connector }) => {
+      setDbColumns(columns)
+      const fields = extractApiFields(testResult.response, connector?.data_path || 'data.items')
+      setApiFields(fields)
+      const auto = autoMapFields(fields, columns)
+      setMappings(auto)
+    },
+  })
+
+  const handleStep1 = () => {
     if (!connectorId) return alert('Pilih connector terlebih dahulu')
     if (!dbConfig.db_name) return alert('Isi nama database')
     tablesMutation.mutate(dbConfig)
@@ -177,7 +203,7 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
     <div className="space-y-4">
       <Steps current={step} />
 
-      {/* ── STEP 1: DB Config + Connector ── */}
+      {/* ── STEP 1 ── */}
       {step === 1 && (
         <div className="space-y-4">
           <div>
@@ -191,7 +217,6 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
               {connectors?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
-
           <div className="border border-gray-200 rounded-lg p-4 space-y-3">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
               <Database size={13} /> Target Database
@@ -199,7 +224,7 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="label">Host</label>
-                <input className="input" value={dbConfig.host} onChange={e => setDbConfig(p => ({ ...p, host: e.target.value }))} placeholder="host.docker.internal" />
+                <input className="input" value={dbConfig.host} onChange={e => setDbConfig(p => ({ ...p, host: e.target.value }))} />
               </div>
               <div>
                 <label className="label">Port</label>
@@ -207,7 +232,7 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
               </div>
               <div className="col-span-2">
                 <label className="label">Database Name *</label>
-                <input className="input" value={dbConfig.db_name} onChange={e => setDbConfig(p => ({ ...p, db_name: e.target.value }))} placeholder="nama_database" />
+                <input className="input" value={dbConfig.db_name} onChange={e => setDbConfig(p => ({ ...p, db_name: e.target.value }))} />
               </div>
               <div>
                 <label className="label">User</label>
@@ -215,64 +240,45 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
               </div>
               <div>
                 <label className="label">Password</label>
-                <input className="input" type="password" value={dbConfig.password} onChange={e => setDbConfig(p => ({ ...p, password: e.target.value }))} placeholder="kosongkan jika tidak ada" />
+                <input className="input" type="password" value={dbConfig.password} onChange={e => setDbConfig(p => ({ ...p, password: e.target.value }))} />
               </div>
             </div>
           </div>
-
           {tablesMutation.isError && (
             <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
               <AlertCircle size={14} /> {tablesMutation.error?.message}
             </div>
           )}
-
-          <button
-            type="button"
-            className="btn-primary w-full"
-            onClick={handleStep1}
-            disabled={tablesMutation.isPending}
-          >
+          <button type="button" className="btn-primary w-full" onClick={handleStep1} disabled={tablesMutation.isPending}>
             {tablesMutation.isPending
-              ? <><Loader2 size={14} className="animate-spin" /> Menghubungkan ke Database...</>
+              ? <><Loader2 size={14} className="animate-spin" /> Menghubungkan...</>
               : <><Database size={14} /> Hubungkan & Lihat Tabel <ChevronRight size={14} /></>}
           </button>
         </div>
       )}
 
-      {/* ── STEP 2: Pilih Tabel ── */}
+      {/* ── STEP 2 ── */}
       {step === 2 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-gray-700">
-              <span className="text-green-600 font-semibold">{tables.length}</span> tabel ditemukan di <code className="bg-gray-100 px-1 rounded text-xs">{dbConfig.db_name}</code>
+              <span className="text-green-600 font-semibold">{tables.length}</span> tabel di <code className="bg-gray-100 px-1 rounded text-xs">{dbConfig.db_name}</code>
             </p>
             <button type="button" className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1" onClick={() => setStep(1)}>
               <ChevronLeft size={12} /> Kembali
             </button>
           </div>
-
-          <input
-            className="input text-sm"
-            placeholder="Cari nama tabel..."
-            value={tableSearch}
-            onChange={e => setTableSearch(e.target.value)}
-          />
-
+          <input className="input text-sm" placeholder="Cari nama tabel..." value={tableSearch} onChange={e => setTableSearch(e.target.value)} />
           {columnsMutation.isError && (
             <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
               <AlertCircle size={14} /> {columnsMutation.error?.message}
             </div>
           )}
-
           <div className="border border-gray-200 rounded-lg overflow-hidden max-h-72 overflow-y-auto divide-y divide-gray-100">
             {filteredTables.map(table => (
-              <button
-                key={table}
-                type="button"
+              <button key={table} type="button"
                 className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-blue-50 transition-colors text-left group"
-                onClick={() => handleStep2(table)}
-                disabled={columnsMutation.isPending}
-              >
+                onClick={() => handleStep2(table)} disabled={columnsMutation.isPending}>
                 <div className="flex items-center gap-2">
                   {columnsMutation.isPending && columnsMutation.variables === table
                     ? <Loader2 size={13} className="animate-spin text-blue-500" />
@@ -282,64 +288,105 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
                 <ChevronRight size={13} className="text-gray-300 group-hover:text-blue-400" />
               </button>
             ))}
-            {filteredTables.length === 0 && (
-              <div className="text-center py-8 text-sm text-gray-400">Tidak ada tabel yang cocok</div>
-            )}
+            {filteredTables.length === 0 && <div className="text-center py-8 text-sm text-gray-400">Tidak ada tabel yang cocok</div>}
           </div>
         </div>
       )}
 
-      {/* ── STEP 3: Mapping Field ── */}
+      {/* ── STEP 3 ── */}
       {step === 3 && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-800">
-                Auto-mapping ke <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs font-mono">{selectedTable}</code>
+                Mapping ke <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs font-mono">{selectedTable}</code>
               </p>
               <p className="text-xs text-gray-500 mt-0.5">
-                <span className="text-green-600 font-medium">{mappings.length} field cocok</span>
+                <span className="text-green-600 font-medium">{mappings.length} field</span>
                 {unmatchedApiFields.length > 0 && <span className="text-amber-600 ml-2">{unmatchedApiFields.length} tidak cocok</span>}
               </p>
             </div>
-            <button type="button" className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1" onClick={() => setStep(2)}>
-              <ChevronLeft size={12} /> Kembali
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Tombol refresh mapping dari API */}
+              {!isEditing || dbColumns.length > 0 ? null : (
+                <button
+                  type="button"
+                  className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1 border border-blue-200 rounded px-2 py-1"
+                  onClick={() => refreshMappingMutation.mutate()}
+                  disabled={refreshMappingMutation.isPending}
+                >
+                  {refreshMappingMutation.isPending
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <RefreshCw size={11} />}
+                  Refresh dari API
+                </button>
+              )}
+              {!isEditing && (
+                <button type="button" className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1" onClick={() => setStep(2)}>
+                  <ChevronLeft size={12} /> Kembali
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Edit mode: info banner */}
+          {isEditing && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-start gap-2">
+              <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>
+                Mode edit — mapping di bawah sudah tersimpan sebelumnya.
+                Klik <strong>Simpan Model</strong> untuk update, atau klik <strong>Ulang dari Awal</strong> untuk redo wizard lengkap.
+              </span>
+            </div>
+          )}
+
+          {isEditing && (
+            <button
+              type="button"
+              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+              onClick={() => { setMappings([]); setStep(1) }}
+            >
+              <ChevronLeft size={11} /> Ulang dari Awal
+            </button>
+          )}
 
           {/* Matched fields */}
           <div className="border border-gray-200 rounded-lg overflow-hidden">
             <div className="bg-green-50 px-3 py-2 border-b border-gray-200">
               <p className="text-xs font-semibold text-green-700 flex items-center gap-1.5">
-                <CheckCircle2 size={12} /> Field Cocok ({mappings.length})
+                <CheckCircle2 size={12} /> Field Mapping ({mappings.length})
               </p>
             </div>
-            <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
+            <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
               {mappings.map((m, i) => (
                 <div key={i} className="flex items-center gap-2 px-3 py-2 text-xs">
-                  <span className="font-mono text-gray-600 w-40 truncate" title={m.source}>{m.source}</span>
+                  <span className="font-mono text-gray-600 w-44 truncate" title={m.source}>{m.source}</span>
                   <ChevronRight size={11} className="text-gray-300 flex-shrink-0" />
-                  <span className="font-mono text-blue-700 w-40 truncate" title={m.target}>{m.target}</span>
+                  <span className="font-mono text-blue-700 w-44 truncate" title={m.target}>{m.target}</span>
                   <TypeBadge type={m.type} />
-                  <span className="text-gray-400 truncate flex-1 ml-1" title={String(m.sampleValue ?? '')}>
-                    {m.sampleValue === null ? <span className="italic">null</span> : String(m.sampleValue).substring(0, 30)}
-                  </span>
-                  <button type="button" className="text-red-300 hover:text-red-500 flex-shrink-0" onClick={() => setMappings(prev => prev.filter((_, j) => j !== i))}>
+                  {m.sampleValue !== null && m.sampleValue !== undefined && (
+                    <span className="text-gray-400 truncate flex-1 ml-1">
+                      {String(m.sampleValue).substring(0, 25)}
+                    </span>
+                  )}
+                  <button type="button" className="text-red-300 hover:text-red-500 flex-shrink-0"
+                    onClick={() => setMappings(prev => prev.filter((_, j) => j !== i))}>
                     <X size={12} />
                   </button>
                 </div>
               ))}
-              {mappings.length === 0 && <div className="text-center py-4 text-xs text-gray-400">Tidak ada field yang cocok</div>}
+              {mappings.length === 0 && (
+                <div className="text-center py-6 text-xs text-gray-400">
+                  Belum ada mapping. Klik "Ulang dari Awal" untuk redo wizard.
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Unmatched fields */}
           {unmatchedApiFields.length > 0 && (
             <div className="border border-amber-200 rounded-lg overflow-hidden">
               <div className="bg-amber-50 px-3 py-2 border-b border-amber-200">
-                <p className="text-xs font-semibold text-amber-700">
-                  ⚠ Field API Tidak Ada di Tabel ({unmatchedApiFields.length})
-                </p>
+                <p className="text-xs font-semibold text-amber-700">⚠ Field API tidak ada di tabel ({unmatchedApiFields.length})</p>
               </div>
               <div className="max-h-32 overflow-y-auto divide-y divide-amber-100">
                 {unmatchedApiFields.map(f => (
@@ -352,7 +399,6 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
             </div>
           )}
 
-          {/* Upsert keys */}
           <div>
             <label className="label">Upsert Keys <span className="text-gray-400 font-normal">(kolom unik, pisahkan koma)</span></label>
             <input
@@ -363,18 +409,13 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
             />
           </div>
 
-          <button
-            type="button"
-            className="btn-primary w-full"
-            onClick={() => setStep(4)}
-            disabled={mappings.length === 0}
-          >
+          <button type="button" className="btn-primary w-full" onClick={() => setStep(4)} disabled={mappings.length === 0}>
             Lanjut Konfirmasi <ChevronRight size={14} />
           </button>
         </div>
       )}
 
-      {/* ── STEP 4: Konfirmasi ── */}
+      {/* ── STEP 4 ── */}
       {step === 4 && (
         <div className="space-y-4">
           <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
@@ -403,13 +444,14 @@ export default function ModelForm({ defaultValues, onSubmit, isLoading }) {
               <span className="font-mono text-xs">{upsertKeys || '(tidak ada)'}</span>
             </div>
           </div>
-
           <div className="flex gap-2">
             <button type="button" className="btn-secondary flex-1" onClick={() => setStep(3)}>
               <ChevronLeft size={14} /> Kembali
             </button>
             <button type="button" className="btn-primary flex-1" onClick={handleStep4} disabled={isLoading}>
-              {isLoading ? <><Loader2 size={14} className="animate-spin" /> Menyimpan...</> : <><CheckCircle2 size={14} /> Simpan Model</>}
+              {isLoading
+                ? <><Loader2 size={14} className="animate-spin" /> Menyimpan...</>
+                : <><CheckCircle2 size={14} /> Simpan Model</>}
             </button>
           </div>
         </div>
